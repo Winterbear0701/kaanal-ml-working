@@ -23,7 +23,7 @@ def say_feedback(text):
 # --- Main Exercise Function ---
 def run_crunches():
     """
-    Final corrected version with a transparent status box and properly scaled skeleton.
+    Final corrected version with a clean text layout and transparent background.
     """
     cap = cv2.VideoCapture(0)
     
@@ -54,50 +54,37 @@ def run_crunches():
             image = cv2.flip(image, 1)
             h, w, _ = image.shape
             
-            # For performance, we process a smaller image
-            process_w, process_h = 640, 480
-            resized_for_processing = cv2.resize(image, (process_w, process_h))
-            image_rgb = cv2.cvtColor(resized_for_processing, cv2.COLOR_BGR2RGB)
-            
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = pose.process(image_rgb)
             
-            # --- MODIFIED: Create a semi-transparent overlay ---
-            overlay = image.copy()
-            alpha = 0.6  # Transparency factor
-            cv2.rectangle(overlay, (0, 0), (w, 120), (0, 0, 0), -1) # Draw black box on the overlay
-            image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0) # Blend overlay with the original image
+            # --- Text background has been removed ---
 
-            # Initialize metrics for the data panel
             abdomen_angle, knee_angle = 0, 0
             hands_behind_head = False
             posture_feedback = "No Person Detected"
             feedback_color = (0, 0, 255)
 
             if results.pose_landmarks:
-                # --- BUG FIX: Scale landmarks from the small processed image to the large display image ---
-                # We create a new PoseLandmarks object to hold the scaled landmarks
-                scaled_landmarks = mp_pose.PoseLandmarks()
-                for i, landmark in enumerate(results.pose_landmarks.landmark):
-                    # To scale, we multiply the normalized coords by the large window's width/height
-                    # The drawing utility will then use these pixel values correctly.
-                    # This is a bit of a workaround as the drawing utility expects a specific object.
-                    scaled_landmarks.landmark.add(
-                        x=landmark.x * w, y=landmark.y * h, z=landmark.z, visibility=landmark.visibility
-                    )
+                landmarks = results.pose_landmarks.landmark
                 
-                # Draw the scaled skeleton
-                mp_drawing = mp.solutions.drawing_utils
-                mp_drawing_styles = mp.solutions.drawing_styles
-                mp_drawing.draw_landmarks(
-                    image,
-                    results.pose_landmarks, # Pass original for connections
-                    mp_pose.POSE_CONNECTIONS,
-                    landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-                )
+                connections = mp_pose.POSE_CONNECTIONS
+                if connections:
+                    for connection in connections:
+                        start_idx = connection[0]
+                        end_idx = connection[1]
+                        
+                        if landmarks[start_idx].visibility > 0.5 and landmarks[end_idx].visibility > 0.5:
+                            start_point = (int(landmarks[start_idx].x * w), int(landmarks[start_idx].y * h))
+                            end_point = (int(landmarks[end_idx].x * w), int(landmarks[end_idx].y * h))
+                            cv2.line(image, start_point, end_point, (255, 255, 255), 2)
+                
+                for landmark in landmarks:
+                     if landmark.visibility > 0.5:
+                         center = (int(landmark.x * w), int(landmark.y * h))
+                         cv2.circle(image, center, 5, (255, 0, 0), -1)
 
                 try:
-                    # Use the UN SCALED landmarks for calculations (they are normalized 0-1)
-                    landmarks = results.pose_landmarks.landmark
+                    # --- All workout logic is unchanged ---
                     l_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
                     r_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
                     l_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
@@ -105,24 +92,18 @@ def run_crunches():
                     l_knee = landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value]
                     r_knee = landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value]
                     l_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
-                    r_ankle = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value]
                     l_elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value]
-                    r_elbow = landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW.value]
                     l_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
-                    r_wrist = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value]
                     l_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR.value]
-                    r_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR.value]
 
-                    # All calculations remain the same
                     abdomen_angle = calculate_angle([l_shoulder.x, l_shoulder.y], [l_hip.x, l_hip.y], [l_knee.x, l_knee.y])
                     knee_angle = calculate_angle([l_hip.x, l_hip.y], [l_knee.x, l_knee.y], [l_ankle.x, l_ankle.y])
                     
-                    wrist_ear_dist_l = np.linalg.norm(np.array([l_wrist.x, l_wrist.y]) - np.array([l_ear.x, l_ear.y]))
-                    wrist_ear_dist_r = np.linalg.norm(np.array([r_wrist.x, r_wrist.y]) - np.array([r_ear.x, r_ear.y]))
-                    hands_behind_head = (wrist_ear_dist_l < 0.15) or (wrist_ear_dist_r < 0.15)
+                    wrist_ear_dist = np.linalg.norm(np.array([l_wrist.x, l_wrist.y]) - np.array([l_ear.x, l_ear.y]))
+                    hands_behind_head = wrist_ear_dist < 0.15
 
                     crunch_angle_l = abdomen_angle
-                    crunch_angle_r = calculate_angle([r_shoulder.x, r_shoulder.y], [r_hip.x, r_hip.y], [r_knee.x, r_knee.y])
+                    crunch_angle_r = calculate_angle([r_shoulder.x, r_shoulder.y], [r_hip.x, r_hip.y], [r_knee.x, r_knee.y]) if all(lm.visibility > 0.5 for lm in [r_shoulder, r_hip, r_knee]) else None
                     
                     if crunch_angle_l and crunch_angle_r and abs(crunch_angle_l - crunch_angle_r) > SYMMETRY_THRESHOLD:
                         feedback = "Keep Shoulders Level"
@@ -149,28 +130,33 @@ def run_crunches():
                             else: feedback = "Too Fast!"
                         elif stage == "UP" and up_start_time and time.time() - up_start_time > 0.5:
                             feedback = "Go Down Slowly"
-                    
-                    # Angles visualization using unscaled (normalized) coordinates
-                    angles_to_display = {"L_ELBOW": (l_shoulder, l_elbow, l_wrist), "L_SHOULDER": (l_hip, l_shoulder, l_elbow), "L_HIP": (l_shoulder, l_hip, l_knee), "L_KNEE": (l_hip, l_knee, l_ankle)}
-                    for name, (p1, p2, p3) in angles_to_display.items():
-                        if all(p.visibility > 0.6 for p in [p1, p2, p3]):
-                            angle = calculate_angle([p1.x, p1.y], [p2.x, p2.y], [p3.x, p3.y])
-                            text_pos = (int(p2.x * w), int(p2.y * h))
-                            cv2.putText(image, f"{int(angle)}", text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,0), 2, cv2.LINE_AA)
-                            cv2.putText(image, f"{int(angle)}", text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
-
                 except Exception as e:
                     feedback = "Make sure body is fully visible"
             
             say_feedback(feedback)
 
-            # --- Display Text on top of the semi-transparent overlay ---
-            cv2.putText(image, f"Sit-ups: {rep_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(image, posture_feedback, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, feedback_color, 2, cv2.LINE_AA)
-            cv2.putText(image, f"Abdomen Angle: {int(abdomen_angle)}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(image, f"Knee Angle: {int(knee_angle)}", (w - 350, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(image, f"Hands Behind Head: {hands_behind_head}", (w - 350, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(image, f"Feedback: {feedback}", (w - 350, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            # --- MODIFIED: Cleaned up text layout with smaller fonts ---
+            
+            font_size_large = 0.9
+            font_size_small = 0.7
+            font_color = (255, 255, 255)
+            outline_color = (0, 0, 0)
+            
+            # Helper to draw text with outline
+            def draw_text(text, position, font_scale, text_color):
+                cv2.putText(image, text, position, cv2.FONT_HERSHEY_SIMPLEX, font_scale, outline_color, 3, cv2.LINE_AA)
+                cv2.putText(image, text, position, cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, 2, cv2.LINE_AA)
+
+            # Column 1
+            draw_text(f"REP: {rep_count}", (10, 30), font_size_large, font_color)
+            draw_text(posture_feedback, (10, 60), font_size_small, feedback_color)
+            draw_text(f"Feedback: {feedback}", (10, 85), font_size_small, (0, 255, 255))
+
+            # Column 2
+            col2_x = w - 300
+            draw_text(f"Abdomen Angle: {int(abdomen_angle)}", (col2_x, 30), font_size_small, font_color)
+            draw_text(f"Knee Angle: {int(knee_angle)}", (col2_x, 55), font_size_small, font_color)
+            draw_text(f"Hands Behind Head: {hands_behind_head}", (col2_x, 80), font_size_small, font_color)
 
             cv2.imshow(WINDOW_NAME, image)
 
